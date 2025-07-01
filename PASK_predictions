@@ -1,0 +1,124 @@
+from Bio import SeqIO
+import pandas as pd
+
+def read_multiple_fasta(fasta_file):
+    sequences = []
+    try:
+        with open(fasta_file, "r") as file:
+            for record in SeqIO.parse(file, "fasta"):
+                sequences.append({
+                    'id': record.id,
+                    'description': record.description,
+                    'sequence': str(record.seq)
+                })
+        return sequences
+    except FileNotFoundError:
+        print(f"Error: File {fasta_file} not found.")
+        return []
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return []
+
+def format_sequence(sequence):
+    return sequence.replace(' ', '')
+
+def is_pask_region(subsequence, min_lysine, min_serine, min_acidic):
+    length = len(subsequence)
+    lysine_count = subsequence.count('K')
+    serine_count = subsequence.count('S')
+    acidic_count = subsequence.count('E') + subsequence.count('D')  
+
+    lysine_percentage = (lysine_count / length) * 100
+    serine_percentage = (serine_count / length) * 100
+    acidic_percentage = (acidic_count / length) * 100
+
+    return (lysine_percentage >= min_lysine and 
+            serine_percentage >= min_serine and 
+            acidic_percentage >= min_acidic)
+
+def expand_pask_region(sequence, start, initial_window, min_lysine, min_serine, min_acidic):
+    current_end = start + initial_window
+    while current_end < len(sequence):
+        subsequence = sequence[start:current_end]
+        if is_pask_region(subsequence, min_lysine, min_serine, min_acidic):
+            current_end += 1
+        else:
+            break
+    return start, current_end - 1, sequence[start:current_end]
+
+def extract_pask_regions(sequence, window_size, min_lysine, min_serine, min_acidic):
+    pask_regions = []
+    i = 0
+    while i < len(sequence) - window_size + 1:
+        subsequence = sequence[i:i + window_size]
+        if is_pask_region(subsequence, min_lysine, min_serine, min_acidic):
+            start, end, region = expand_pask_region(sequence, i, window_size, min_lysine, min_serine, min_acidic)
+            pask_regions.append((start, end, region))
+            i = end + 1
+        else:
+            i += 1
+    return pask_regions
+
+def merge_close_regions(regions, max_distance):
+    if len(regions) == 0:
+        return regions
+
+    merged_regions = []
+    current_start, current_end, current_sequence = regions[0]
+
+    for start, end, sequence in regions[1:]:
+        if start - current_end <= max_distance:
+            current_end = end
+            current_sequence += sequence
+        else:
+            merged_regions.append((current_start, current_end, current_sequence))
+            current_start, current_end, current_sequence = start, end, sequence
+
+    merged_regions.append((current_start, current_end, current_sequence))
+    return merged_regions
+
+def process_multiple_sequences(fasta_file, window_size, min_lysine, min_serine, min_acidic, min_amino_acids, max_distance):
+    sequences = read_multiple_fasta(fasta_file)
+    if not sequences:
+        return
+    
+    results = []
+
+    for seq in sequences:
+        sequence = seq['sequence']
+        pask_regions = extract_pask_regions(sequence, window_size, min_lysine, min_serine, min_acidic)
+        merged_regions = merge_close_regions(pask_regions, max_distance)
+        final_regions = [region for region in merged_regions if (region[1] - region[0] + 1) >= min_amino_acids]
+        
+        for region in final_regions:
+            formatted_sequence = format_sequence(region[2])
+            if len(formatted_sequence) != (region[1] - region[0] + 1):
+                print(f"Error: Formatted sequence length mismatch. Expected: {region[1] - region[0] + 1}, Got: {len(formatted_sequence)}")
+
+            results.append({
+                'Protein ID': seq['id'],
+                'Description': seq['description'],
+                'Start Position': region[0],
+                'End Position': region[1],
+                'Sequence': formatted_sequence
+            })
+
+    df_results = pd.DataFrame(results)
+    pd.set_option('display.max_colwidth', None)
+    pd.set_option('display.expand_frame_repr', False)
+    pd.set_option('display.max_rows', None)
+
+    display(df_results.style.set_properties(**{'text-align': 'left'})
+        .set_table_styles([{'selector': 'th', 'props': [('text-align', 'left')]}]))
+
+# Example parameters
+fasta_file = "sequences_BioID.txt"
+window_size = 20
+min_lysine = 30
+min_serine = 10
+min_acidic = 10
+min_amino_acids = 35
+max_distance = 5
+
+# Run the program
+process_multiple_sequences(fasta_file, window_size, min_lysine, min_serine, min_acidic, min_amino_acids, max_distance)
